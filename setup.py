@@ -18,7 +18,7 @@ ShortDescription = Summary
 
 needed = [
     'evasion-common',
-    'docker-testing-aids',
+    'testing-aid',
 ]
 
 test_needed = [
