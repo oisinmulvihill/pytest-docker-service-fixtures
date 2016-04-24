@@ -4,10 +4,20 @@ Oisin Mulvihill
 2015-02-06
 
 """
+import os
+import sys
 import uuid
+import socket
 import logging
+import tempfile
+import StringIO
+import subprocess
+import ConfigParser
+from string import Template
 
 import pytest
+from evasion.common import net
+
 # imported so request.getfuncargvalue will find:
 from testing.aid.containers import dk_logger
 from testing.aid.containers import dk_config
@@ -208,23 +218,145 @@ def influxdb(request):
             self.user = influxdb.settings['auth']['user']
             self.password = influxdb.settings['auth']['password']
             self.db = "testingdb_{}".format(uuid.uuid4().hex)
+            log.debug("InfluxDB port={} host={} db={}".format(
+                self.port, self.host, self.db
+            ))
 
     dbconn = Conn()
-    from pnc.stats.backend import db
-    db.DB.init(dict(
-        db=dbconn.db,
-        port=dbconn.port,
-        host=dbconn.host,
-        user=dbconn.user,
-        password=dbconn.password,
-    ))
-    db.DB.create_database()
-    log.info('database ready for testing "{}"'.format(dbconn.db))
-
-    def db_teardown(x=None):
-        log.warn('teardown database for testing "{}"'.format(dbconn.db))
-        db.DB.drop_database()
-
-    request.addfinalizer(db_teardown)
 
     return dbconn
+
+
+def free_tcp_port():
+    """Return a free socket port we can listen to.
+
+    :returns: A TCP Port to listen on.
+
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(('', 0))
+    tcp_port = s.getsockname()[1]
+    s.close()
+
+    return tcp_port
+
+
+class BasePyramidServerRunner(object):
+    """Start/Stop the testserver for Pyramid based web testing purposes.
+    """
+    def __init__(self, config={}, test_config_name='test_cfg.ini'):
+        """
+        """
+        self.log = get_log("ServerRunner")
+        self.serverPid = None
+        self.serverProcess = None
+
+        self.port = int(config.get('port', free_tcp_port()))
+        self.interface = config.get('interface', '127.0.0.1')
+
+        self.URI = "http://%s:%s" % (self.interface, self.port)
+
+        # Make directory to put file and other data into:
+        self.test_dir = tempfile.mkdtemp()
+        self.log.info("Test Server temp directory <%s>" % self.test_dir)
+
+        # Get template and render to the test director:
+        cfg_tmpl = Template(self.template_config())
+        data = cfg_tmpl.substitute(config)
+        self.temp_config = os.path.join(self.test_dir, test_config_name)
+        with open(self.temp_config, "wb") as fd:
+            fd.write(data)
+        self.config = ConfigParser.ConfigParser()
+        self.config.readfp(StringIO.StringIO(data))
+        config = ConfigParser.ConfigParser(dict(here=self.test_dir))
+        config.read(self.temp_config)
+
+        # The service to run with the rendered configuration:
+        self.cmd = "pserve {}".format(self.temp_config)
+
+    def template_config(self):
+        """Return the python string template INI file contents to use.
+        """
+        raise NotImplementedError("Implent to return ")
+
+    def cleanup(self):
+        """Clean up temp files and directories.
+        """
+        for f in [self.temp_config]:
+            try:
+                os.remove(f)
+            except OSError:
+                os.system('rm {}'.format(f))
+        try:
+            os.removedirs(self.test_dir)
+        except OSError:
+            os.system('rm -rf {}'.format(self.test_dir))
+
+    def start(self):
+        """Spawn the web app in testserver mode.
+
+        After spawning the web app this method will wait
+        for the web app to respond to normal requests.
+
+        """
+        self.log.info(
+            "start: running <%s> in <%s>." % (self.cmd, self.test_dir)
+        )
+
+        # Spawn as a process and then wait until
+        # the web server is ready to accept requests.
+        #
+        self.serverProcess = subprocess.Popen(
+            args=self.cmd,
+            shell=True,
+            cwd=self.test_dir,
+        )
+        pid = self.serverProcess.pid
+
+        if not self.isRunning():
+            raise SystemError("%s did not start!" % self.cmd)
+
+        #self.log.debug("start: waiting for '%s' readiness." % self.URI)
+        net.wait_for_ready(self.URI + "/ping", timeout=2)
+
+        return pid
+
+    def stop(self):
+        """Stop the server running."""
+        self.log.info("stop: STOPPING Server.")
+
+        # Stop:
+        if self.isRunning():
+            self.serverProcess.terminate()
+            os.waitpid(self.serverProcess.pid, 0)
+
+        # Make sure its actually stopped:
+        if sys.platform.startswith('win'):
+            subprocess.call(
+                args="taskkill /F /T /IM pserve.exe",
+                shell=True,
+            )
+        else:
+            subprocess.call(
+                args=(
+                    'ps -a | grep -v grep | grep "pserve*" '
+                    '| awk \'{print "kill -15 "$1}\' | sh'
+                ),
+                shell=True,
+            )
+
+    def isRunning(self):
+        """Called to testserver
+
+        returned:
+            True - its running.
+            False - its not running.
+
+        """
+        returned = False
+        process = self.serverProcess
+
+        if process and process.poll() is None:
+            returned = True
+
+        return returned
