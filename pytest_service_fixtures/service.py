@@ -254,6 +254,13 @@ class BasePyramidServerRunner(object):
         self.port = int(config.get('port', free_tcp_port()))
         self.interface = config.get('interface', '127.0.0.1')
 
+        # Add in so when template is rendered this are found:
+        if 'host' not in config:
+            config['host'] = self.interface
+
+        if 'port' not in config:
+            config['port'] = self.port
+
         self.URI = "http://%s:%s" % (self.interface, self.port)
 
         # Make directory to put file and other data into:
@@ -266,6 +273,10 @@ class BasePyramidServerRunner(object):
         self.temp_config = os.path.join(self.test_dir, test_config_name)
         with open(self.temp_config, "wb") as fd:
             fd.write(data)
+        self.log.debug("test run directory '{}' test config '{}'".format(
+            self.test_dir,
+            self.temp_config,
+        ))
         self.config = ConfigParser.ConfigParser()
         self.config.readfp(StringIO.StringIO(data))
         config = ConfigParser.ConfigParser(dict(here=self.test_dir))
