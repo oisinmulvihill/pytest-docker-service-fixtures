@@ -203,24 +203,52 @@ def influxdb(request):
     """
     log = get_log('influxdb')
 
-    influxdb = request.getfuncargvalue('dk_influxdb')
+    use_env = os.environ.get("DKInfluxDB_UseENV", "no").strip().lower()
+    log.debug("DKInfluxDB_UseENV={}".format(use_env))
+    if use_env == "yes":
+        backend = {}
+        backend['host'] = os.environ.get("DKInfluxDB_HOST")
+        log.info("DKInfluxDB_HOST={}".format(backend['host']))
+        backend['port'] = int(os.environ.get("DKInfluxDB_PORT"))
+        log.info("DKInfluxDB_PORT={}".format(backend['port']))
+        backend['user'] = os.environ.get("DKInfluxDB_USER")
+        log.info("DKInfluxDB_USER={}".format(backend['user']))
+        backend['password'] = os.environ.get("DKInfluxDB_PASSWORD")
+        log.info("DKInfluxDB_PASSWORD={}".format(backend['password']))
+        backend['db'] = os.environ.get("DKInfluxDB_DB")
+        log.info("DKInfluxDB_DB={}".format(backend['db']))
 
-    class Conn(object):
-        def __init__(self):
-            """Returned so others can ask for what port, host, etc influx
-            is running on.
-            """
-            ports = influxdb.settings['export']['ports']
-            port = [p['export_port'] for p in ports if p['name'] == 'db']
-            port = port[0]
-            self.host = influxdb.settings['interface']
-            self.port = port
-            self.user = influxdb.settings['auth']['user']
-            self.password = influxdb.settings['auth']['password']
-            self.db = "testingdb_{}".format(uuid.uuid4().hex)
-            log.debug("InfluxDB port={} host={} db={}".format(
-                self.port, self.host, self.db
-            ))
+        class Conn(object):
+            def __init__(self):
+                """Reuse and running InfluxDB"""
+                self.host = backend['host']
+                self.port = backend['port']
+                self.user = backend['user']
+                self.password = backend['password']
+                self.db = backend['db']
+                log.debug("InfluxDB port={} host={} db={}".format(
+                    self.port, self.host, self.db
+                ))
+
+    else:
+        influxdb = request.getfuncargvalue('dk_influxdb')
+
+        class Conn(object):
+            def __init__(self):
+                """Returned so others can ask for what port, host, etc influx
+                is running on.
+                """
+                ports = influxdb.settings['export']['ports']
+                port = [p['export_port'] for p in ports if p['name'] == 'db']
+                port = port[0]
+                self.host = influxdb.settings['interface']
+                self.port = port
+                self.user = influxdb.settings['auth']['user']
+                self.password = influxdb.settings['auth']['password']
+                self.db = "testingdb_{}".format(uuid.uuid4().hex)
+                log.debug("InfluxDB port={} host={} db={}".format(
+                    self.port, self.host, self.db
+                ))
 
     dbconn = Conn()
 
